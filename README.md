@@ -15,6 +15,8 @@ This is a fun and simple implementation of a URL shortener service with a differ
 ## Cutting-Edge Tech Stack
 
 - **Latest .NET**: This project is built using the latest .NET 8.
+
+- **Dapper**: A high-performance Object-Relational Mapping (ORM) library for .NET, Dapper simplifies data access and ensures efficient database operations.
   
 - **Best Practices**: I am trying to follow the latest best practices as recommended in the Microsoft docs for .NET 8 and from the my favourite .NET content creators.
 
