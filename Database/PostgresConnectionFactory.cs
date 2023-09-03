@@ -7,10 +7,7 @@ public class PostgresConnectionFactory : IDbConnectionFactory
 {
     private readonly string _connectionString;
 
-    public PostgresConnectionFactory(IConfiguration configuration)
-    {
-        _connectionString = configuration.GetConnectionString("Postgres") ?? throw new InvalidOperationException("Postgres connection string not found.");
-    }
+    public PostgresConnectionFactory(string connectionString) => _connectionString = connectionString;
 
     public IDbConnection CreateConnection() => new NpgsqlConnection(_connectionString);
 }

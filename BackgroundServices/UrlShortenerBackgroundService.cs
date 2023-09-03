@@ -1,36 +1,43 @@
 ﻿using Microsoft.Extensions.Configuration;
+using RabbitMQ.Client;
 using System;
 using System.Collections.Concurrent;
+using System.Text;
 using UrlShortener.Database;
 
-namespace UrlShortener.Services;
+namespace UrlShortener.BackgroundServices;
 
-public class ShortenedUrlsBackgroundService : IHostedService
+public class UrlShortenerBackgroundService : IHostedService, IQueueSizeIncreaser
 {
     private readonly string _domainNameOfTheSystem;
     private readonly int _shortenedValueLength;
-    private readonly int _queueSize;
+    private int _maxQueueSize;
+    private uint _currentQueueSize = 0;
     private readonly int _waitForMsIfQueueFull;
     private readonly IUrlRepository _urlRepository;
-    private readonly ConcurrentQueue<string> _shortenedUrls;
+    private readonly IModel _channel;
+    public const string QueueName = "shortened-urls";
     private readonly Random _random = new();
     private const string _alphabet = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-    public ShortenedUrlsBackgroundService(IConfiguration configuration, IUrlRepository urlRepository, ConcurrentQueue<string> shortenedValues)
+    public UrlShortenerBackgroundService(IConfiguration configuration, IUrlRepository urlRepository, IModel channel)
     {
         _domainNameOfTheSystem = configuration.GetValue<string>("DomainNameOfTheSystem") ?? throw new ApplicationException("DomainNameOfTheSystem is not found!");
         _shortenedValueLength = configuration.GetValue<int>("ShortenedLength");
-        _queueSize = configuration.GetValue<int>("QueueSize");
+        _maxQueueSize = configuration.GetValue<int>("MaxQueueSize");
         _waitForMsIfQueueFull = configuration.GetValue<int>("WaitForMsIfQueueFull");
         _urlRepository = urlRepository;
-        _shortenedUrls = shortenedValues;
+
+        // Set up the queue.
+        _channel = channel;
+        DeclareQueueAndUpdateCurrentQueueSize();
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (_shortenedUrls.Count > _queueSize)
+            if (!QueueAcceptsEntries())
             {
                 await Task.Delay(_waitForMsIfQueueFull, cancellationToken);
                 continue;
@@ -41,10 +48,12 @@ public class ShortenedUrlsBackgroundService : IHostedService
             {
                 uniqueShortenedValue = GenerateRandomShortenedValue();
             }
-            while (await _urlRepository.ShortenedValueExists(uniqueShortenedValue, cancellationToken) && !cancellationToken.IsCancellationRequested);
+            while (await _urlRepository.ShortenedValueExists(uniqueShortenedValue, cancellationToken)
+                    && !cancellationToken.IsCancellationRequested);
 
             string shortenedUrl = $"https://{_domainNameOfTheSystem}/{uniqueShortenedValue}";
-            _shortenedUrls.Enqueue(shortenedUrl);
+            var body = Encoding.UTF8.GetBytes(shortenedUrl);
+            _channel.BasicPublish(exchange: "", routingKey: QueueName, body: body, basicProperties: null);
         }
     }
 
@@ -58,6 +67,25 @@ public class ShortenedUrlsBackgroundService : IHostedService
         }
 
         return new string(chars);
+    }
+
+    public void IncreaseQueueSize(int byPercentage)
+    {
+        int increasedAmount = (int)(_currentQueueSize + (_currentQueueSize * byPercentage / 100));
+
+        _maxQueueSize = increasedAmount;
+    }
+
+    private void DeclareQueueAndUpdateCurrentQueueSize()
+    {
+        var queueDeclareOk = _channel.QueueDeclare(queue: QueueName, durable: false, exclusive: false, autoDelete: false, arguments: null);
+        _currentQueueSize = queueDeclareOk.MessageCount;
+    }
+
+    private bool QueueAcceptsEntries()
+    {
+        DeclareQueueAndUpdateCurrentQueueSize();
+        return _currentQueueSize <= _maxQueueSize;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

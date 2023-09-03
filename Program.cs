@@ -1,8 +1,10 @@
 using System.Collections.Concurrent;
+using RabbitMQ.Client;
 using UrlShortener.Database;
 using UrlShortener.Endpoints;
 using UrlShortener.ExceptionHandling;
-using UrlShortener.Services;
+using UrlShortener.BackgroundServices;
+using UrlShortener.MessageQueue;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,17 +13,12 @@ builder.Services.AddSwaggerGen();
 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-// Queue to hold pre-created shortenedValues
-builder.Services.AddSingleton<ConcurrentQueue<string>>();
+builder
+    .Services
+    .RegisterDatabaseAndRepoistories(builder.Configuration)
+    .RegisterBackgroundServices(builder.Configuration)
+    .RegisterRabbitMq(builder.Configuration);
 
-builder.Services.AddTransient<IUrlRepository, UrlRepository>();
-builder.Services.AddSingleton<IDbConnectionFactory, PostgresConnectionFactory>();
-
-builder.Services.Configure<HostOptions>(opt =>
-{
-    opt.ServicesStartConcurrently = true;
-});
-builder.Services.AddHostedService<ShortenedUrlsBackgroundService>();
 
 var app = builder.Build();
 
