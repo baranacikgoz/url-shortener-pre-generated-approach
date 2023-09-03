@@ -61,7 +61,7 @@ public static class UrlEndpoints
 
     private static async Task<IResult> RedirectAsync(string shortenedUrl, IUrlRepository repository)
     {
-        if (!Uri.TryCreate(shortenedUrl, UriKind.Absolute, out var shortenedUri))
+        if (!Uri.TryCreate(shortenedUrl, UriKind.Absolute, out var _))
         {
             return Results.BadRequest($"The provided url ({shortenedUrl}) is not valid.");
         }
