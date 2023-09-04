@@ -6,6 +6,7 @@ using RabbitMQ.Client;
 using Polly;
 using System.Text;
 using Microsoft.Extensions.Caching.Distributed;
+using UrlShortener.RetryPolicies;
 
 namespace UrlShortener.Endpoints;
 
@@ -63,11 +64,7 @@ public static class UrlEndpoints
             ShortenedUrl = shortenedUrl
         }, cancellationToken);
 
-
-        var cacheOptions = new DistributedCacheEntryOptions()
-            .SetSlidingExpiration(TimeSpan.FromDays(15));
-
-        await cache.SetStringAsync(url, shortenedUrl, cacheOptions, cancellationToken);
+        await SetCacheAsync(url, cache, shortenedUrl, cancellationToken);
 
         return Results.Ok(shortenedUrl);
     }
@@ -94,16 +91,10 @@ public static class UrlEndpoints
 
     private static async Task<string?> GetShortenedUrlFromCache(string url, IDistributedCache cache, CancellationToken cancellationToken)
     {
-        var cacheRetryPolicy = Policy
-                .Handle<Exception>()
-                .OrResult<string?>(r => r is null)
-                .WaitAndRetryAsync(
-                    retryCount: 3,
-                    sleepDurationProvider: retryAttempt => TimeSpan.FromMilliseconds(retryAttempt * 100),
-                    onRetry: (exception, timeSpan, retryCount, context) =>
-                    {
-                        // Log the exception or perform other actions
-                    });
+        var cacheRetryPolicy = PollyPolicies.CacheGetRetryPolicy(onRetry: (result, timeSpan, retryCount, context) =>
+        {
+            // Log error or do something else.
+        });
 
         string? shortenedUrl = await cacheRetryPolicy.ExecuteAsync(() => cache.GetStringAsync(url, cancellationToken));
         return shortenedUrl;
@@ -111,18 +102,13 @@ public static class UrlEndpoints
 
     private static async Task<string?> GenerateNewShortenedUrl(IQueueSizeIncreaser queueSizeIncreaser, IModel channel)
     {
-        var retryPolicy = Policy
-            .HandleResult<BasicGetResult>(r => r is null)
-            .WaitAndRetryAsync(
-                retryCount: 3, // Number of retries
-                sleepDurationProvider: retryAttempt => TimeSpan.FromMilliseconds(retryAttempt * 300),
-                onRetry: (result, timeSpan, retryCount, context) =>
-                {
-                    int increaseByPercentage = retryCount * 5;
-                    queueSizeIncreaser.IncreaseQueueSize(increaseByPercentage);
-                });
+        var queueRetryPolicy = PollyPolicies.QueueRetrievalRetryPolicy(onRetry: (result, timeSpan, retryCount, context) =>
+        {
+            int increaseByPercentage = retryCount * 5;
+            queueSizeIncreaser.IncreaseQueueSize(increaseByPercentage);
+        });
 
-        var result = await retryPolicy.ExecuteAsync(() => Task.FromResult(channel.BasicGet(queue: UrlShortenerBackgroundService.QueueName, autoAck: true)));
+        var result = await queueRetryPolicy.ExecuteAsync(() => Task.FromResult(channel.BasicGet(queue: UrlShortenerBackgroundService.QueueName, autoAck: true)));
 
         if (result is null)
         {
@@ -130,6 +116,19 @@ public static class UrlEndpoints
         }
 
         return Encoding.UTF8.GetString(result.Body.ToArray());
+    }
+
+    private static async Task SetCacheAsync(string url, IDistributedCache cache, string? shortenedUrl, CancellationToken cancellationToken)
+    {
+        var cacheOptions = new DistributedCacheEntryOptions()
+                    .SetSlidingExpiration(TimeSpan.FromDays(15));
+
+        var cacheSetRetryPolicy = PollyPolicies.CacheSetRetryPolicy(onRetry: (exception, timeSpan, retryCount, context) =>
+        {
+            // Log error or do something else.
+        });
+
+        await cacheSetRetryPolicy.ExecuteAsync(() => cache.SetStringAsync(url, shortenedUrl, cacheOptions, cancellationToken));
     }
 
 }
