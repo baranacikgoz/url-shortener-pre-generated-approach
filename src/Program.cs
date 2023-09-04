@@ -5,6 +5,7 @@ using UrlShortener.Endpoints;
 using UrlShortener.ExceptionHandling;
 using UrlShortener.BackgroundServices;
 using UrlShortener.MessageQueue;
+using UrlShortener.Caching;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,7 +18,8 @@ builder
     .Services
     .RegisterDatabaseAndRepoistories(builder.Configuration)
     .RegisterBackgroundServices(builder.Configuration)
-    .RegisterRabbitMq(builder.Configuration);
+    .RegisterRabbitMq(builder.Configuration)
+    .RegisterRedis(builder.Configuration);
 
 
 var app = builder.Build();

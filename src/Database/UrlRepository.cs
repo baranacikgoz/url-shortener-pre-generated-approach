@@ -9,33 +9,45 @@ public class UrlRepository : IUrlRepository
 
     public UrlRepository(IDbConnectionFactory connectionFactory) => _connectionFactory = connectionFactory;
 
-    public async Task<DefaultIdType> CreateAsync(Url urlEntity)
+    public async Task CreateAsync(Url urlEntity, CancellationToken cancellationToken)
     {
         const string sql =
             @"
                 INSERT INTO ""Urls"" (""OriginalUrl"", ""ShortenedUrl"")
                 VALUES               ( @OriginalUrl  ,  @ShortenedUrl  )
-                RETURNING ""Id"";
             ";
 
         using var connection = _connectionFactory.CreateConnection();
-        return await connection.ExecuteScalarAsync<int>(sql, urlEntity);
+        await connection.ExecuteAsync(sql, urlEntity);
     }
 
-    public async Task<Url?> GetByShortenedUrlAsync(string shortenedUrl)
+    public async Task<string?> GetOriginalUrlByShortenedUrlAsync(string shortenedUrl, CancellationToken cancellationToken)
     {
         const string sql =
             @"
-                SELECT ""OriginalUrl"", ""ShortenedUrl""
+                SELECT ""OriginalUrl""
                 FROM ""Urls""
                 WHERE ""ShortenedUrl"" = @ShortenedUrl
             ";
 
         using var connection = _connectionFactory.CreateConnection();
-        return await connection.QuerySingleOrDefaultAsync<Url?>(sql, new { ShortenedUrl = shortenedUrl });
+        return await connection.QuerySingleOrDefaultAsync<string?>(sql, new { ShortenedUrl = shortenedUrl });
     }
 
-    public async Task<bool> ShortenedValueExists(string shortenedUrl, CancellationToken cancellationToken)
+    public async Task<string?> GetShortenedUrlByOriginalUrlAsync(string originalUrl, CancellationToken cancellationToken)
+    {
+        const string sql =
+            @"
+                SELECT ""ShortenedUrl""
+                FROM ""Urls""
+                WHERE ""OriginalUrl"" = @OriginalUrl
+            ";
+
+        using var connection = _connectionFactory.CreateConnection();
+        return await connection.QuerySingleOrDefaultAsync<string?>(sql, new { OriginalUrl = originalUrl });
+    }
+
+    public async Task<bool> ShortenedUrlExists(string shortenedUrl, CancellationToken cancellationToken)
     {
         const string sql =
             @"

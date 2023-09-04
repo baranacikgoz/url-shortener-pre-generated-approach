@@ -11,8 +11,7 @@ public class UrlShortenerBackgroundService : IHostedService, IQueueSizeIncreaser
 {
     private readonly string _domainNameOfTheSystem;
     private readonly int _shortenedValueLength;
-    private int _maxQueueSize;
-    private uint _currentQueueSize = 0;
+    private uint _queueSize; // We want to keep our message queue at this size.
     private readonly int _waitForMsIfQueueFull;
     private readonly IUrlRepository _urlRepository;
     private readonly IModel _channel;
@@ -24,40 +23,41 @@ public class UrlShortenerBackgroundService : IHostedService, IQueueSizeIncreaser
     {
         _domainNameOfTheSystem = configuration.GetValue<string>("DomainNameOfTheSystem") ?? throw new ApplicationException("DomainNameOfTheSystem is not found!");
         _shortenedValueLength = configuration.GetValue<int>("ShortenedLength");
-        _maxQueueSize = configuration.GetValue<int>("MaxQueueSize");
+        _queueSize = configuration.GetValue<uint>("MaxQueueSize");
         _waitForMsIfQueueFull = configuration.GetValue<int>("WaitForMsIfQueueFull");
         _urlRepository = urlRepository;
 
         // Set up the queue.
         _channel = channel;
-        DeclareQueueAndUpdateCurrentQueueSize();
+        DeclareQueue(_channel);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (!QueueAcceptsEntries())
+            if (!ShouldEnqueue())
             {
                 await Task.Delay(_waitForMsIfQueueFull, cancellationToken);
                 continue;
             }
 
-            string uniqueShortenedValue;
+            string uniqueRandomString;
+            string shortenedUrl;
             do
             {
-                uniqueShortenedValue = GenerateRandomShortenedValue();
+                uniqueRandomString = GenerateRandomString();
+                shortenedUrl = $"https://{_domainNameOfTheSystem}/{uniqueRandomString}";
             }
-            while (await _urlRepository.ShortenedValueExists(uniqueShortenedValue, cancellationToken)
+            while (await _urlRepository.ShortenedUrlExists(shortenedUrl, cancellationToken)
                     && !cancellationToken.IsCancellationRequested);
 
-            string shortenedUrl = $"https://{_domainNameOfTheSystem}/{uniqueShortenedValue}";
             var body = Encoding.UTF8.GetBytes(shortenedUrl);
             _channel.BasicPublish(exchange: "", routingKey: QueueName, body: body, basicProperties: null);
         }
     }
 
-    private string GenerateRandomShortenedValue()
+    private string GenerateRandomString()
     {
         char[] chars = new char[_shortenedValueLength];
 
@@ -71,22 +71,19 @@ public class UrlShortenerBackgroundService : IHostedService, IQueueSizeIncreaser
 
     public void IncreaseQueueSize(int byPercentage)
     {
-        int increasedAmount = (int)(_currentQueueSize + (_currentQueueSize * byPercentage / 100));
+        uint currentQueueSize = GetCurrentQueueSize();
+        uint increasedAmount = currentQueueSize + (currentQueueSize * (uint)byPercentage / 100);
 
-        _maxQueueSize = increasedAmount;
+        _queueSize = increasedAmount;
     }
 
-    private void DeclareQueueAndUpdateCurrentQueueSize()
-    {
-        var queueDeclareOk = _channel.QueueDeclare(queue: QueueName, durable: false, exclusive: false, autoDelete: false, arguments: null);
-        _currentQueueSize = queueDeclareOk.MessageCount;
-    }
+    private static QueueDeclareOk DeclareQueue(IModel channel)
+        => channel.QueueDeclare(queue: QueueName, durable: false, exclusive: false, autoDelete: false, arguments: null);
 
-    private bool QueueAcceptsEntries()
-    {
-        DeclareQueueAndUpdateCurrentQueueSize();
-        return _currentQueueSize <= _maxQueueSize;
-    }
+
+    private bool ShouldEnqueue() => GetCurrentQueueSize() <= _queueSize;
+
+    private uint GetCurrentQueueSize() => DeclareQueue(_channel).MessageCount;
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
